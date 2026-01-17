@@ -7,7 +7,6 @@ pipeline {
 
   environment {
     SONAR_SCANNER_HOME = tool 'sonar-scanner'
-    DOCKER_USER = 'your_dockerhub_username'
     IMAGE_TAG = "${BUILD_NUMBER}"
   }
 
@@ -41,36 +40,38 @@ pipeline {
       }
     }
 
-    stage('Build Docker Images') {
+    stage('Build, Scan & Push Docker Images') {
       steps {
-        sh """
-          docker build -t $DOCKER_USER/user-service:$IMAGE_TAG ./user-service
-          docker build -t $DOCKER_USER/product-service:$IMAGE_TAG ./product-service
-        """
-      }
-    }
-    stage('Security Scan') {
-      steps {
-        sh """
-          trivy image $DOCKER_USER/user-service:$IMAGE_TAG
-          trivy image $DOCKER_USER/product-service:$IMAGE_TAG
-        """
-      }
-    }
-    stage('Push Docker Images') {
-      steps {
-        sh """
-          docker push $DOCKER_USER/user-service:$IMAGE_TAG
-          docker push $DOCKER_USER/product-service:$IMAGE_TAG
-        """
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-creds',
+          usernameVariable: 'DOCKER_USER',
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
+          sh '''
+            echo "Login DockerHub"
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+
+            echo "Build images"
+            docker build -t $DOCKER_USER/user-service:$IMAGE_TAG ./user-service
+            docker build -t $DOCKER_USER/product-service:$IMAGE_TAG ./product-service
+
+            echo "Security scan (Trivy)"
+            trivy image --exit-code 0 $DOCKER_USER/user-service:$IMAGE_TAG
+            trivy image --exit-code 0 $DOCKER_USER/product-service:$IMAGE_TAG
+
+            echo "Push images"
+            docker push $DOCKER_USER/user-service:$IMAGE_TAG
+            docker push $DOCKER_USER/product-service:$IMAGE_TAG
+          '''
+        }
       }
     }
 
     stage('Deploy to Kubernetes') {
       steps {
-        sh """
+        sh '''
           kubectl apply -f k8s/
-        """
+        '''
       }
     }
   }
